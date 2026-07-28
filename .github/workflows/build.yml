@@ -1,13 +1,27 @@
 name: build
 
-# The whole point of this workflow is that the wasm build is the ONLY thing
-# that proves the extension can actually load. `cargo check` on the host target
-# type-checks the code and says nothing about whether Zed can run it, so a
-# green check here without the wasm step would be a pass that cannot fail.
+# Zed loads a wasm COMPONENT, not a core module. `cargo build --target
+# wasm32-wasip1` produces a core module, and the first version of this workflow
+# asserted only that the artifact was non-empty -- which a core module also
+# satisfies. It went green, and Zed then refused the extension with
+#
+#   failed to compile wasm component: failed to parse WebAssembly module:
+#   attempted to parse a wasm module with a component parser
+#
+# A build check that passes on an artifact the target cannot load is a check
+# whose success and failure states are indistinguishable. So this workflow now
+# componentizes and asserts the component header byte, which is the one thing
+# that actually distinguishes the two.
 on:
   push:
     branches: [main]
   pull_request:
+
+env:
+  # The WASI preview1 adapter `wasm-tools component new` needs to turn a
+  # wasip1 core module into a component. Pinned: an adapter mismatch produces
+  # a component that builds and then traps at instantiation.
+  ADAPTER_VERSION: v27.0.0
 
 jobs:
   wasm:
@@ -18,21 +32,47 @@ jobs:
       - name: Install the wasm target
         run: rustup target add wasm32-wasip1
 
-      - name: Build
+      - name: Install wasm-tools
+        run: cargo install wasm-tools --locked
+
+      - name: Fetch the WASI preview1 reactor adapter
+        run: |
+          curl -sSfL -o adapter.wasm \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${ADAPTER_VERSION}/wasi_snapshot_preview1.reactor.wasm"
+          test -s adapter.wasm
+
+      - name: Build the core module
         run: cargo build --release --target wasm32-wasip1
 
-      - name: Confirm an artifact was actually produced
-        # `cargo build` exits 0 on a no-op. Assert the file exists and is not
-        # empty, or "build succeeded" tells us nothing about whether it built.
+      - name: Componentize
         run: |
-          artifact=target/wasm32-wasip1/release/quant_platform_mcp.wasm
-          test -s "$artifact" || { echo "::error::$artifact missing or empty"; exit 1; }
-          echo "built $(stat -c%s "$artifact") bytes"
+          wasm-tools component new \
+            target/wasm32-wasip1/release/quant_platform_mcp.wasm \
+            --adapt "wasi_snapshot_preview1=adapter.wasm" \
+            -o extension.wasm
+
+      - name: Assert it is a COMPONENT, not a core module
+        # This is the assertion the first version of this workflow was missing.
+        # Byte 4 of the header is 0x01 for a core module and 0x0d for a
+        # component. Checking only that the file exists and is non-empty passes
+        # on the artifact Zed rejects.
+        run: |
+          test -s extension.wasm || { echo "::error::extension.wasm missing or empty"; exit 1; }
+          header=$(head -c 8 extension.wasm | xxd -p)
+          echo "header: $header"
+          case "$header" in
+            0061736d0d000100) echo "OK: wasm component ($(stat -c%s extension.wasm) bytes)" ;;
+            0061736d01000000) echo "::error::this is a CORE MODULE; Zed will refuse it"; exit 1 ;;
+            *)                echo "::error::not a wasm file at all: $header"; exit 1 ;;
+          esac
+
+      - name: Validate the component parses
+        run: wasm-tools validate --features all extension.wasm
 
       - uses: actions/upload-artifact@v4
         with:
-          name: quant_platform_mcp.wasm
-          path: target/wasm32-wasip1/release/quant_platform_mcp.wasm
+          name: extension.wasm
+          path: extension.wasm
 
   manifest:
     runs-on: ubuntu-latest

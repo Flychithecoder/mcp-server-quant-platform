@@ -89,6 +89,20 @@ def main() -> int:
             f"crate is {crate!r} so cargo emits {crate}.wasm, but the build "
             "workflow does not mention that filename")
 
+    # Zed loads a wasm COMPONENT. `cargo build` emits a core module, and a
+    # workflow that only checks the file is non-empty goes green on an artifact
+    # Zed refuses with "attempted to parse a wasm module with a component
+    # parser". That happened; this makes losing the componentize step loud.
+    if "wasm-tools component new" not in workflow:
+        problems.append(
+            "the build workflow does not run `wasm-tools component new`, so it "
+            "ships a core module. Zed only loads components")
+    if "0061736d0d000100" not in workflow:
+        problems.append(
+            "the build workflow does not assert the component header "
+            "(0061736d0d000100), so it cannot tell a component from the core "
+            "module Zed rejects")
+
     if problems:
         print("extension.toml would be rejected:", file=sys.stderr)
         for problem in problems:

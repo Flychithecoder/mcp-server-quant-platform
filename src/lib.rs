@@ -11,8 +11,6 @@
 //! them a *different* build than the one their dashboard and licence are bound
 //! to, which is worse than asking them to point at the one they have.
 
-use std::fs;
-
 use zed_extension_api::{
     self as zed, serde_json, ContextServerId, Command, Project, Result,
 };
@@ -82,17 +80,27 @@ impl zed::Extension for QuantPlatformExtension {
         let settings: QuantSettings = serde_json::from_value(settings)
             .map_err(|e| format!("{e}\n\n{CONFIG_HELP}"))?;
 
-        // Fail here, with the path in the message, rather than letting Zed
-        // report an opaque "server exited" when the interpreter does not exist.
-        // The two ways this goes wrong on Windows -- the WindowsApps stub and a
-        // venv without python3.exe -- both produce a path that looks right.
-        if !fs::metadata(&settings.python_path).is_ok_and(|m| m.is_file()) {
+        // Deliberately NOT an existence check.
+        //
+        // The first version called `fs::metadata(&settings.python_path)` to
+        // fail early with a helpful message instead of letting Zed report an
+        // opaque "server exited". But an extension runs inside a WASI sandbox
+        // with a virtualised filesystem, so it cannot stat a host path: the
+        // check failed for a python_path that was present and working, and Zed
+        // refused to start the server with
+        //
+        //     python_path does not point at a file: C:\...\python.exe
+        //
+        // A verification that always says "no" is as broken as one that always
+        // says "yes", and worse in practice because it accuses correct config.
+        // Exactly the `is_owner_only` bug in a different sandbox.
+        //
+        // Only emptiness is checkable from in here. Whether the interpreter
+        // exists is Zed's to discover when it spawns the process, and it has
+        // the host filesystem to say so accurately.
+        if settings.python_path.trim().is_empty() {
             return Err(format!(
-                "python_path does not point at a file: {}\n\
-                 Use the interpreter that has jesse_live installed, e.g.\n  \
-                 macOS/Linux: /path/to/.venv/bin/python\n  \
-                 Windows:     C:\\\\path\\\\to\\\\.venv\\\\Scripts\\\\python.exe",
-                settings.python_path
+                "python_path is empty.\n\n{CONFIG_HELP}"
             ));
         }
 
