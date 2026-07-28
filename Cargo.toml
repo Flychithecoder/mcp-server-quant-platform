@@ -1,0 +1,19 @@
+[package]
+name = "quant_platform_mcp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+# 0.7.0 is the current published API. Zed refuses to load an extension built
+# against an API version it does not support, so this is a hard compatibility
+# boundary rather than a preference -- bump it deliberately, not by `cargo
+# update`.
+zed_extension_api = "0.7.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

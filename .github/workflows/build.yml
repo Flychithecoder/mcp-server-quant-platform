@@ -1,0 +1,42 @@
+name: build
+
+# The whole point of this workflow is that the wasm build is the ONLY thing
+# that proves the extension can actually load. `cargo check` on the host target
+# type-checks the code and says nothing about whether Zed can run it, so a
+# green check here without the wasm step would be a pass that cannot fail.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the wasm target
+        run: rustup target add wasm32-wasip1
+
+      - name: Build
+        run: cargo build --release --target wasm32-wasip1
+
+      - name: Confirm an artifact was actually produced
+        # `cargo build` exits 0 on a no-op. Assert the file exists and is not
+        # empty, or "build succeeded" tells us nothing about whether it built.
+        run: |
+          artifact=target/wasm32-wasip1/release/quant_platform_mcp.wasm
+          test -s "$artifact" || { echo "::error::$artifact missing or empty"; exit 1; }
+          echo "built $(stat -c%s "$artifact") bytes"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quant_platform_mcp.wasm
+          path: target/wasm32-wasip1/release/quant_platform_mcp.wasm
+
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: extension.toml must satisfy Zed's publishing rules
+        run: python3 scripts/check_manifest.py
